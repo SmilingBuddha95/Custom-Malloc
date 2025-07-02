@@ -40,26 +40,51 @@
 // block points to either the beginning of the next block, or the end of the
 // heap.
 int my_check() {
-  char* p;
-  char* lo = (char*)mem_heap_lo();
-  char* hi = (char*)mem_heap_hi() + 1;
-  size_t size = 0;
+  for (int i = 0; i < NUM_BINS; i++) {
+    my_free_list_header* bin_head = binArray[i];
+    if (!bin_head) {
+      printf("[CHECK] Bin %d is NULL — possible uninitialized binArray\n", i);
+      return -1;
+    }
 
-  p = lo;
-  while (lo <= p && p < hi) {
-    size = *(size_t*)p;
-    p += size;
-  }
+    my_free_list_header* curr = bin_head->next;
+    int count = 0;
 
-  if (p != hi) {
-    printf("Bad headers did not end at heap_hi!\n");
-    printf("heap_lo: %p, heap_hi: %p, size: %lu, p: %p\n", lo, hi, size, p);
-    return -1;
+    while (curr != bin_head) {
+      count++;
+
+      if (curr->size < MY_FREE_LIST_HEADER_SIZE || curr->size % ALIGNMENT != 0) {
+        printf("[CHECK] Invalid block size %zu in bin %d at %p\n", curr->size, i, curr);
+        return -1;
+      }
+
+      if ((void*)curr < mem_heap_lo() || (void*)curr >= mem_heap_hi()) {
+        printf("[CHECK] Block at %p out of heap bounds in bin %d\n", curr, i);
+        return -1;
+      }
+
+      if (curr->next->prev != curr || curr->prev->next != curr) {
+        printf("[CHECK] Broken links in bin %d at block %p\n", i, curr);
+        return -1;
+      }
+
+      int correct_bin = find_bin(curr->size);
+      if (correct_bin != i) {
+        printf("[CHECK] Block of size %zu is in bin %d but should be in bin %d\n", curr->size, i, correct_bin);
+        return -1;
+      }
+
+      curr = curr->next;
+
+      if (count > 1000000) {
+        printf("[CHECK] Too many blocks in bin %d — possible cycle\n", i);
+        return -1;
+      }
+    }
   }
 
   return 0;
 }
-
 // init - Initialize the malloc package.  Called once before any other
 // calls are made.  Since this is a very simple implementation, we just
 // return success.
