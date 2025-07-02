@@ -62,7 +62,7 @@ static int add_range(const malloc_impl_t* impl, range_t** ranges, char* lo,
   // TODO(project3): YOUR CODE HERE
   if (!IS_ALIGNED(lo)) {
     fprintf(stderr, "Error: Block at address %p is not aligned to %d bytes.\n", lo, R_ALIGNMENT);
-    return -1; // Indicate an error
+    return 0; // Indicate an error
   }
 
   // The payload must lie within the extent of the heap
@@ -70,7 +70,7 @@ static int add_range(const malloc_impl_t* impl, range_t** ranges, char* lo,
   if (lo < (char*)impl->heap_lo() || hi > (char*)impl->heap_hi()) {
     fprintf(stderr, "Error: Block with addresses [%p, %p] is outside heap bounds [%p, %p].\n",
             lo, hi, impl->heap_lo(), impl->heap_hi());
-    return -1; // Indicate an error
+    return 0; // Indicate an error
   }
  
 
@@ -80,7 +80,7 @@ static int add_range(const malloc_impl_t* impl, range_t** ranges, char* lo,
     if ((lo <= curr->hi && hi >= curr->lo) || (hi >= curr->lo && lo <= curr->hi)) {
       fprintf(stderr, "Error: Block with addresses [%p, %p] overlaps with existing block [%p, %p].\n",
               lo, hi, curr->lo, curr->hi);
-      return -1; // Indicate an error
+      return 0; // Indicate an error
     }
   }
  
@@ -91,7 +91,7 @@ static int add_range(const malloc_impl_t* impl, range_t** ranges, char* lo,
   p = (range_t*)malloc(sizeof(range_t));
   if (p == NULL) {
     fprintf(stderr, "Error: Could not allocate memory for range struct.\n");
-    return -1;
+    return 0;
   }
   p->lo = lo;
   p->hi = hi;
@@ -107,19 +107,26 @@ static void remove_range(range_t** ranges, char* lo) {
     range_t* prev = NULL;
 
     while (curr != NULL) {
-        if (curr->lo == lo) {
+        // Match based on range containment, not exact pointer equality
+        if (lo >= curr->lo && lo <= curr->hi) {
             if (prev == NULL) {
                 *ranges = curr->next;
             } else {
                 prev->next = curr->next;
             }
-            free(curr); 
-            return;     
+            free(curr);
+            return;
         }
-        prev = curr;      
-        curr = curr->next; // Move to the next range in the list
+
+        prev = curr;
+        curr = curr->next;
     }
+
+    // Optional: diagnostic for unmatched free
+    fprintf(stderr, "[remove_range WARNING] Could not find block for ptr = %p\n", lo);
 }
+
+
 
 
 // clear_ranges - free all of the range records for a trace
@@ -161,10 +168,12 @@ int eval_mm_valid(const malloc_impl_t* impl, trace_t* trace, int tracenum) {
 
     switch (trace->ops[i].type) {
     case ALLOC:  // malloc
-
+      // printf("[BLOCK_TRACK] trace->blocks[%d] = %p before alloc\n", index, trace->blocks[index]);
       // Call the student's malloc
       if ((p = (char*) impl->malloc(size)) == NULL) {
         malloc_error(tracenum, i, "impl malloc failed.");
+        clear_ranges(&ranges);
+        impl->reset_brk();
         return 0;
       }
 
@@ -172,6 +181,8 @@ int eval_mm_valid(const malloc_impl_t* impl, trace_t* trace, int tracenum) {
       // to the range list if OK. The block must be  be aligned properly,
       // and must not overlap any currently allocated block.
       if (add_range(impl, &ranges, p, size, tracenum, i) == 0) {
+        clear_ranges(&ranges);
+        impl->reset_brk();
         return 0;
       }
 
@@ -182,6 +193,7 @@ int eval_mm_valid(const malloc_impl_t* impl, trace_t* trace, int tracenum) {
 
       // Remember region
       trace->blocks[index] = p;
+      // printf("[TRACE] saving ptr = %p at index = %d\n", p, index);
       trace->block_sizes[index] = size;
       break;
 
@@ -191,14 +203,19 @@ int eval_mm_valid(const malloc_impl_t* impl, trace_t* trace, int tracenum) {
       oldp = trace->blocks[index];
       if ((newp = (char*) impl->realloc(oldp, size)) == NULL) {
         malloc_error(tracenum, i, "impl realloc failed.");
+        clear_ranges(&ranges);
+        impl->reset_brk();
         return 0;
       }
 
       // Remove the old region from the range list
+      assert(IS_ALIGNED(p));  // Or log p to double-check it's what you think it is
       remove_range(&ranges, oldp);
 
       // Check new block for correctness and add it to range list
       if (add_range(impl, &ranges, newp, size, tracenum, i) == 0) {
+        clear_ranges(&ranges);
+        impl->reset_brk();
         return 0;
       }
 
@@ -213,6 +230,8 @@ int eval_mm_valid(const malloc_impl_t* impl, trace_t* trace, int tracenum) {
       for (int j = 0; j < oldsize; j++) {
         if (newp[j] != (char)0) { 
             malloc_error(tracenum, i, "Data in realloc'ed block does not match original data.");
+            clear_ranges(&ranges);
+            impl->reset_brk();
             return 0;
         }
       }
@@ -227,6 +246,8 @@ int eval_mm_valid(const malloc_impl_t* impl, trace_t* trace, int tracenum) {
 
       // Remove region from list and call student's free function
       p = trace->blocks[index];
+      // printf("[TRACE] freeing ptr = %p from index = %d\n", p, index);
+      assert(IS_ALIGNED(p));  // Or log p to double-check it's what you think it is
       remove_range(&ranges, p);
       impl->free(p);
       break;
